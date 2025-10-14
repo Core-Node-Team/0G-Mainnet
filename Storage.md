@@ -16,6 +16,11 @@
  * [Blockchain Explorer](https://chainscan.0g.ai)<br>
 
 
+### Corenode RPC
+
+https://0g-mainnet.corenodehq.xyz
+https://0g-mainnet-2.corenodehq.xyz
+
 ## 💻 Sistem Gereksinimleri
 | Bileşenler | Minimum Gereksinimler | 
 | ------------ | ------------ |
