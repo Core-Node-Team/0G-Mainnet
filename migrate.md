@@ -305,7 +305,7 @@ Hazırladığın ham (raw) linki kullanarak scripti doğrudan $HOME dizinine ind
 
 ### Scripti sunucuya indir
 ```
-curl -o $HOME/migrate.sh https://raw.githubusercontent.com/molla202/0g-main/refs/heads/main/migrate-reth/migrate.sh
+curl -o $HOME/migrate.sh https://raw.githubusercontent.com/Core-Node-Team/0G-Mainnet/refs/heads/main/migrate.sh
 ```
 ### Çalıştırma yetkisi ver
 ```
