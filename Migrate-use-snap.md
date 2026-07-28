@@ -143,7 +143,6 @@ sed -i "s|^rpc-dial-url *=.*|rpc-dial-url = \"http://localhost:${OG_PORT}551\"|"
 
 ```bash
 sudo systemctl disable geth
-sudo rm -f /etc/systemd/system/geth.service
 ```
 
 ### Kamu IP'sini önceden çözümle (nat extip'in literal `$(...)` olarak kalmasını önlemek için)
