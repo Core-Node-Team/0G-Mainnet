@@ -6,7 +6,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-OG_PURPLE='\033[38;2;203;138;255m' # 0G Hex: #CB8AFF
 NC='\033[0m' # No Color
 
 # Ekranı Temizle ve Corenode Logosunu Bas
@@ -38,7 +37,7 @@ fail() {
 # Profil Yükleme
 [ -f $HOME/.bash_profile ] && source $HOME/.bash_profile
 
-echo -e "${BLUE}[0/8] Gerekli bağımlılıklar kontrol ediliyor...${NC}"
+echo -e "${BLUE}[0/9] Gerekli bağımlılıklar kontrol ediliyor...${NC}"
 echo "--------------------------------------------------"
 REQUIRED_CMDS=("jq" "screen" "curl" "wget" "tar" "python3" "bc")
 declare -A PKG_NAME_MAP=( ["python3"]="python3" )
@@ -111,7 +110,7 @@ echo "--------------------------------------------------"
 echo ""
 
 # 1. ADIM: Canlı Blok Yüksekliğini Otomatik Al ve Hafızaya At
-echo -e "${BLUE}[1/8] Canlı ağ üzerinden güncel blok yüksekliği çekiliyor...${NC}"
+echo -e "${BLUE}[1/9] Canlı ağ üzerinden güncel blok yüksekliği çekiliyor...${NC}"
 export CHAIN_HEAD=$(curl -s -X POST http://localhost:${OG_PORT}545 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
@@ -140,7 +139,7 @@ if [ -d "$HOME/.0gchaind/0g-home/geth-home" ]; then
 fi
 
 # 2. ADIM: Servisleri Durdur ve CL Yedekle
-echo -e "${BLUE}[2/8] Mevcut servisler durduruluyor ve CL yedekleniyor...${NC}"
+echo -e "${BLUE}[2/9] Mevcut servisler durduruluyor ve CL yedekleniyor...${NC}"
 sudo systemctl stop 0gchaind geth 2>/dev/null
 BACKUP_DIR="$HOME/.0gchaind/backup-$(date +%Y%m%d-%H%M%S)"
 mkdir -p $BACKUP_DIR
@@ -148,7 +147,7 @@ cp -r $HOME/.0gchaind/0g-home/0gchaind-home $BACKUP_DIR/0gchaind-home || fail "C
 echo -e "${GREEN}[✓] CL verileri güvenli bölgeye yedeklendi: ${YELLOW}$BACKUP_DIR${NC}"
 
 # 3. ADIM: Bağımlılık Paketleri ve Aristotle v1.0.6 Kurulumu
-echo -e "${BLUE}[3/8] Aristotle v1.0.6 indiriliyor...${NC}"
+echo -e "${BLUE}[3/9] Aristotle v1.0.6 indiriliyor...${NC}"
 
 cd $HOME
 wget -O aristotle.tar.gz https://github.com/0gfoundation/0gchain-Aristotle/releases/download/v1.0.6/aristotle-v1.0.6.tar.gz
@@ -176,7 +175,7 @@ cp $HOME/aristotle-used/kzg-trusted-setup.json $HOME/.0gchaind/0g-home/
 echo -e "${GREEN}[✓] Yeni mimarinin binary ve temel dosyaları hazır (klasör: $EXTRACTED_DIR).${NC}"
 
 # 4. ADIM: Geth Verilerini Dışa Aktarma (export başarısı doğrulanmadan eski veri SİLİNMEZ)
-echo -e "${BLUE}[4/8] Geth veritabanından RLP blok ihracı başladı (Bu işlem zaman alacaktır)...${NC}"
+echo -e "${BLUE}[4/9] Geth veritabanından RLP blok ihracı başladı (Bu işlem zaman alacaktır)...${NC}"
 EXPORT_FILE="$HOME/.0gchaind/0g-home/chain-export.rlp"
 
 if $HOME/go/bin/geth export \
@@ -195,16 +194,109 @@ fi
 echo -e "${GREEN}[✓] Geth verileri dışarı aktarıldı ve eski veri dizini temizlendi.${NC}"
 
 # 5. ADIM: Reth Init
-# NOT: "geth export ... 1 $CHAIN_HEAD" zaten 1. bloktan (genesis hariç) başladığı için
-# ayrıca bir "trim/filtreleme" adımına gerek yok — export dosyası doğrudan import edilebilir.
-echo -e "${BLUE}[5/8] Reth veritabanı ilklendiriliyor...${NC}"
+echo -e "${BLUE}[5/9] Reth veritabanı ilklendiriliyor...${NC}"
 $HOME/go/bin/reth init \
   --chain $HOME/aristotle-used/geth-genesis.json \
   --datadir $HOME/.0gchaind/0g-home/reth-home || fail "reth init başarısız oldu."
 echo -e "${GREEN}[✓] Reth veritabanı ilklendirildi.${NC}"
 
-# 6. ADIM: Otomatik Screen Açma ve Canlı İthalat (Reth Import) — başarı/hata durumu ayrıca kontrol edilir
-echo -e "${BLUE}[6/8] 'Corenode_Reth_Import' adında yeni bir Screen açılıyor...${NC}"
+# 6. ADIM: RLP Filtreleme (Trim) — blok numarasını gerçekten RLP header'ından okuyup filtreler
+# NOT: "geth export ... 1 $CHAIN_HEAD" zaten 1. bloktan (genesis hariç) başladığı için bu adım
+# şu anki akışta pratikte hiçbir bloğu atlamaz (start_block=1 => skipped=0) — ama mantığı doğru
+# çalıştığı için (block_number RLP'den doğru okunuyor, test edildi) ileride farklı bir start_block
+# ile yeniden kullanılabilir/kurtarma senaryolarında işe yarar diye script'te tutuluyor.
+echo -e "${BLUE}[6/9] RLP dosyası filtreleniyor (trim)...${NC}"
+
+TRIM_START_BLOCK=1
+TRIMMED_FILE="$HOME/.0gchaind/0g-home/chain-export-from-${TRIM_START_BLOCK}.rlp"
+
+cat << 'PYEOF' > $HOME/.0gchaind/0g-home/trim_export.py
+import sys
+
+def read_rlp_length(f):
+    first = f.read(1)
+    if not first:
+        return None, 0
+    b = first[0]
+    if b < 0xc0:
+        return None, 0
+    elif b <= 0xf7:
+        return first, b - 0xc0
+    else:
+        len_bytes_count = b - 0xf7
+        len_bytes = f.read(len_bytes_count)
+        return first + len_bytes, int.from_bytes(len_bytes, 'big')
+
+def get_block_number(block_data):
+    offset = 0
+    b = block_data[offset]
+    offset += 1 if b <= 0xf7 else 1 + (b - 0xf7)
+    b = block_data[offset]
+    offset += 1 if b <= 0xf7 else 1 + (b - 0xf7)
+    for _ in range(8):
+        b = block_data[offset]
+        if b <= 0x80:
+            offset += 1
+        elif b <= 0xb7:
+            offset += 1 + (b - 0x80)
+        elif b <= 0xbf:
+            n = b - 0xb7
+            offset += 1 + n + int.from_bytes(block_data[offset+1:offset+1+n], 'big')
+        elif b <= 0xf7:
+            offset += 1 + (b - 0xc0)
+        else:
+            n = b - 0xf7
+            offset += 1 + n + int.from_bytes(block_data[offset+1:offset+1+n], 'big')
+    b = block_data[offset]
+    if b == 0x80:
+        return 0
+    if b < 0x80:
+        return b
+    length = b - 0x80
+    return int.from_bytes(block_data[offset+1:offset+1+length], 'big')
+
+def main():
+    input_file = sys.argv[1]
+    output_file = sys.argv[2]
+    start_block = int(sys.argv[3]) if len(sys.argv) > 3 else 1
+
+    block_count = 0
+    skipped = 0
+
+    with open(input_file, "rb") as fin, open(output_file, "wb") as fout:
+        while True:
+            header_bytes, length = read_rlp_length(fin)
+            if header_bytes is None:
+                break
+            block_body = fin.read(length)
+            if len(block_body) < length:
+                break
+            full_block = header_bytes + block_body
+            try:
+                block_number = get_block_number(full_block)
+            except Exception as e:
+                print(f"Warning: could not parse block at index {block_count + skipped}, writing anyway: {e}")
+                fout.write(full_block)
+                block_count += 1
+                continue
+            if block_number < start_block:
+                skipped += 1
+            else:
+                fout.write(full_block)
+                block_count += 1
+
+    print(f"Done. Skipped {skipped}, wrote {block_count} blocks to {output_file}")
+
+if __name__ == "__main__":
+    main()
+PYEOF
+
+python3 $HOME/.0gchaind/0g-home/trim_export.py "$EXPORT_FILE" "$TRIMMED_FILE" "$TRIM_START_BLOCK" || fail "trim_export.py başarısız oldu."
+[ -s "$TRIMMED_FILE" ] || fail "Trim edilmiş dosya oluşturulamadı ya da boş."
+echo -e "${GREEN}[✓] Filtreleme tamamlandı: ${YELLOW}$TRIMMED_FILE${NC}"
+
+# 7. ADIM: Otomatik Screen Açma ve Canlı İthalat (Reth Import) — başarı/hata durumu ayrıca kontrol edilir
+echo -e "${BLUE}[7/9] 'Corenode_Reth_Import' adında yeni bir Screen açılıyor...${NC}"
 echo -e "${YELLOW}[!] Süreç bu aşamada kilitlenecek ve ithalatın bitmesini bekleyecektir.${NC}"
 echo -e "${CYAN}[>] İthalat durumunu canlı izlemek için yeni terminalden şu komutu girebilirsin:${NC}"
 echo -e "${CYAN}    screen -r Corenode_Reth_Import${NC}"
@@ -212,7 +304,7 @@ echo -e "${CYAN}    screen -r Corenode_Reth_Import${NC}"
 STATUS_FILE="/tmp/corenode_reth_import_status_$$"
 rm -f "$STATUS_FILE"
 
-screen -dmS Corenode_Reth_Import bash -c "$HOME/go/bin/reth import --chain $HOME/aristotle-used/geth-genesis.json --datadir $HOME/.0gchaind/0g-home/reth-home '$EXPORT_FILE'; echo \$? > $STATUS_FILE; exec bash"
+screen -dmS Corenode_Reth_Import bash -c "$HOME/go/bin/reth import --chain $HOME/aristotle-used/geth-genesis.json --datadir $HOME/.0gchaind/0g-home/reth-home '$TRIMMED_FILE'; echo \$? > $STATUS_FILE; exec bash"
 
 # exec bash screen'i canlı tuttuğu için "screen kapandı mı" yerine "durum dosyası oluştu mu" kontrol ediyoruz
 while [ ! -f "$STATUS_FILE" ]; do
@@ -227,7 +319,7 @@ fi
 echo -e "${GREEN}[✓] Reth veri ithalatı (Import) başarıyla bitti! Ana akışa geri dönüldü.${NC}"
 
 # 7. ADIM: Konfigürasyon ve Servis Dosyalarının Yenilenmesi
-echo -e "${BLUE}[7/8] Konfigürasyonlar ve systemd servisleri güncelleniyor...${NC}"
+echo -e "${BLUE}[8/9] Konfigürasyonlar ve systemd servisleri güncelleniyor...${NC}"
 
 CONFIG_FILE="$HOME/.0gchaind/0g-home/0gchaind-home/config/app.toml"
 if grep -q "^rpc-dial-url" "$CONFIG_FILE" 2>/dev/null; then
@@ -307,7 +399,7 @@ sudo systemctl enable reth 0gchaind
 echo -e "${GREEN}[✓] Yeni servis konfigürasyonları başarıyla sisteme işlendi.${NC}"
 
 # 8. ADIM: Yeni Yapıyı Ayağa Kaldırma ve Doğrulama
-echo -e "${BLUE}[8/8] Yeni Reth ve Consensus servisleri tetikleniyor...${NC}"
+echo -e "${BLUE}[9/9] Yeni Reth ve Consensus servisleri tetikleniyor...${NC}"
 sudo systemctl start reth
 sleep 5
 if ! sudo systemctl is-active --quiet reth; then
@@ -323,20 +415,7 @@ fi
 echo -e "${GREEN}========================================================================"
 echo -e "   [✓] MIGRATION TAMAMLANDI! NODE BAŞARIYLA RETH MIMARISINE GECTI. [✓]  "
 echo -e "========================================================================${NC}"
-echo -e "${OG_PURPLE}"
-cat << "EOF"
-      ████████        ████████   
-    ███  ██  ███    ███      ███ 
-   ███  ██    ███  ███           
-   ███ ██     ███  ███   ████████
-   █████      ███  ███        ███
-    ███      ███    ███      ███ 
-      ████████        ████████   
-
-              WE ARE 0G
-EOF
-echo -e "${NC}"
-echo -e "${YELLOW}Logları anlık izlemek için:${NC}"
+echo -e "${YELLOW}Logları anlık izlemek için aşağıdaki komutları kullanabilirsin:${NC}"
 echo -e "    Reth Logları:      ${CYAN}sudo journalctl -u reth -f -o cat${NC}"
 echo -e "    Consensus Logları: ${CYAN}sudo journalctl -u 0gchaind -f -o cat${NC}"
 echo ""
