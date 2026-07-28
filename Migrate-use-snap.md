@@ -1,8 +1,5 @@
 # 🔄 Corenode Altyapısı: Geth'den Reth'e Snapshot ile Geçiş Rehberi
 
-Bu rehber, mevcut RLP export/trim/import akışı yerine hazır bir **reth-home snapshot'ı** kullanarak execution katmanını Reth'e taşır.
-
-> 💡 **Tasarım kararı:** Geth→Reth geçişinde değişen tek şey execution (yürütme) katmanıdır. Consensus katmanı (`0gchaind-home`, validator state dahil) **hiç değişmez**. Bu yüzden snapshot'ı yalnızca `reth-home` için indiriyoruz; cosmos/consensus verisine dokunmuyoruz. Böylece `priv_validator_state.json` ile ilgili çifte imzalama riskini baştan tamamen ortadan kaldırmış oluyoruz — ayrı bir yedekleme/geri yükleme adımına bile gerek kalmıyor.
 
 ---
 
@@ -61,7 +58,6 @@ wget -O aristotle.tar.gz https://github.com/0gfoundation/0gchain-Aristotle/relea
 EXTRACTED_DIR=$(tar -tzf aristotle.tar.gz | head -1 | cut -f1 -d"/")
 tar -xzvf aristotle.tar.gz -C $HOME
 rm -rf aristotle.tar.gz
-rm -rf $HOME/aristotle-used 2>/dev/null
 mv "$HOME/$EXTRACTED_DIR" "$HOME/aristotle-used"
 ```
 
@@ -93,16 +89,15 @@ mkdir -p $HOME/.0gchaind/0g-home/reth-home
 ### Snapshot'ı indir (bütünlük kontrolüyle)
 
 ```bash
-
-```
-
 mv $HOME/.0gchaind/0g-home/0gchaind-home/data/priv_validator_state.json $HOME/.0gchaind/priv_validator_state.json.backup 2>/dev/null || true
-
+```
+```
 rm -rf $HOME/.0gchaind/0g-home/0gchaind-home/data
 rm -rf $HOME/.0gchaind/0g-home/reth-home/db
 rm -rf $HOME/.0gchaind/0g-home/reth-home/static_files
 mkdir -p $HOME/.0gchaind/0g-home/reth-home
-
+```
+```
 SNAPSHOT_URL="https://files.corenodehq.xyz/0g/snapshot/"
 LATEST_COSMOS=$(curl -s $SNAPSHOT_URL | grep -oP '0g_\d{8}-\d{4}_\d+_cosmos\.tar\.lz4' | sort | tail -n 1)
 LATEST_RETH=$(curl -s $SNAPSHOT_URL | grep -oP '0g_\d{8}-\d{4}_\d+_reth\.tar\.lz4' | sort | tail -n 1)
@@ -133,7 +128,7 @@ if [ -n "$LATEST_COSMOS" ] && [ -n "$LATEST_RETH" ]; then
 else
   echo "No snapshot found"
 fi
-
+```
 ## 5️⃣ Konfigürasyon Güncellemesi ve Servis Dosyaları
 
 ### app.toml engine bağlantısını güncelle
