@@ -274,7 +274,9 @@ EOF
 ```
 
 ### Güncellenmiş 0gchaind.service dosyasını oluştur
-
+```
+ETH_RPC_URL=
+```
 ```bash
 sudo tee /etc/systemd/system/0gchaind.service > /dev/null <<EOF
 [Unit]
