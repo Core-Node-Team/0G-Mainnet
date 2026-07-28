@@ -87,7 +87,6 @@ cp $HOME/aristotle-used/kzg-trusted-setup.json $HOME/.0gchaind/0g-home/
 > Bu adıma geldiysen 2. adımda snapshot'ın var olduğunu zaten doğruladın — artık eski veriyi silmek güvenli.
 
 ```bash
-rm -rf $HOME/.0gchaind/0g-home/geth-home
 mkdir -p $HOME/.0gchaind/0g-home/reth-home
 ```
 
