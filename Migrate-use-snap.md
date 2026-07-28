@@ -179,7 +179,9 @@ EOF
 > `${PUBLIC_IP}` burada kaçışsız kullanıldı, çünkü değeri az önce çözümledik ve dosyaya gerçek IP olarak gömülmesini istiyoruz (`\$(curl...)` gibi literal/çözümlenmemiş bırakmıyoruz).
 
 ### 0gchaind.service dosyasını oluştur (consensus tarafı değişmedi — mevcut haliyle aynı)
-
+```
+ETH_RPC_URL=
+```
 ```bash
 sudo tee /etc/systemd/system/0gchaind.service > /dev/null <<EOF
 [Unit]
