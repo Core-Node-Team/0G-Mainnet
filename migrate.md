@@ -8,6 +8,19 @@ Bu döküman, sunucunuzda halihazırda çalışan ve altyapı standartlarımıza
 
 > ⚠️ **Önemli Değişiklik:** Blok numarasını servisleri durdurmadan önce değil, **durdurduktan sonra** alıyoruz. Bu sayede geth'in DB'sindeki gerçek son blok yakalanır; canlıyken alınan numara o sırada işlenmekte olan birkaç bloğu atlar.
 
+## Oto migrate (opsiyonel)
+- Full migrate
+```
+curl -sSL https://raw.githubusercontent.com/Core-Node-Team/0G-Mainnet/refs/heads/main/migrate-use-snap.sh -o migrate-use-snap.sh
+chmod +x migrate-use-snap.sh
+./migrate-use-snap.sh
+```
+- Snap migrate
+```
+curl -sSL https://raw.githubusercontent.com/Core-Node-Team/0G-Mainnet/refs/heads/main/0g_reth_migration.sh -o 0g_reth_migration.sh
+chmod +x 0g_reth_migration.sh
+./0g_reth_migration.sh
+```
 ### Servisleri durdur
 
 ```bash
