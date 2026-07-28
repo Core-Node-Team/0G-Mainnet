@@ -220,7 +220,10 @@ tail -f $HOME/.0gchaind/0g-home/reth-import.log
 ## 6️⃣ Konfigürasyon Güncellemesi ve Yeni Servis Dosyaları
 
 ### app.toml engine bağlantısını güncelle
-
+```
+echo "export OG_PORT=59" >> $HOME/.bash_profile
+source $HOME/.bash_profile
+```
 ```bash
 sed -i "s|^rpc-dial-url *=.*|rpc-dial-url = \"http://localhost:${OG_PORT}551\"|" \
   $HOME/.0gchaind/0g-home/0gchaind-home/config/app.toml
