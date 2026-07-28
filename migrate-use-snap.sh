@@ -9,6 +9,13 @@ CYAN='\033[0;36m'
 OG_PURPLE='\033[38;2;203;138;255m' # 0G Hex: #CB8AFF
 NC='\033[0m' # No Color
 
+set -o pipefail
+
+fail() {
+    echo -e "${RED}[✗] HATA: $1${NC}"
+    exit 1
+}
+
 # Ekranı Temizle ve Corenode Logosunu Bas
 clear
 echo -e "${CYAN}"
@@ -23,12 +30,33 @@ echo "███    ███ ███    ███   ███    ███   �
 echo "████████▀   ▀██████▀    ███    ███   ██████████      ▀█    █▀   ▀██████▀  ████████▀    ██████████ "
 echo "                        ███    ███                                                              "
 echo "                                                                                                "
-echo "           AUTOMATED GETH --> RETH MIGRATION VIA SNAPSHOT               "
+echo "        AUTOMATED GETH --> RETH MIGRATION VIA SNAPSHOT (v2 - fixed)     "
 echo "========================================================================"
 echo -e "${NC}"
 
 # Profil Yükleme
 [ -f $HOME/.bash_profile ] && source $HOME/.bash_profile
+
+echo -e "${BLUE}[0/6] Gerekli bağımlılıklar kontrol ediliyor...${NC}"
+echo "--------------------------------------------------"
+REQUIRED_CMDS=("curl" "wget" "tar" "aria2c" "lz4" "jq")
+declare -A PKG_NAME_MAP=( ["aria2c"]="aria2" )
+MISSING_PKGS=()
+for cmd in "${REQUIRED_CMDS[@]}"; do
+    if ! command -v "$cmd" &>/dev/null; then
+        pkg="${PKG_NAME_MAP[$cmd]:-$cmd}"
+        MISSING_PKGS+=("$pkg")
+    fi
+done
+if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
+    echo -e "${YELLOW}[!] Eksik paketler kuruluyor: ${MISSING_PKGS[*]}${NC}"
+    sudo apt update -y &>/dev/null
+    sudo apt install -y "${MISSING_PKGS[@]}" &>/dev/null || fail "Bağımlılıklar kurulamadı: ${MISSING_PKGS[*]}"
+else
+    echo -e "${GREEN}[✓] Tüm bağımlılıklar mevcut.${NC}"
+fi
+echo "--------------------------------------------------"
+echo ""
 
 echo -e "${BLUE}[>] Port ve RPC Yapılandırması Kontrol Ediliyor...${NC}"
 echo "--------------------------------------------------"
@@ -69,6 +97,7 @@ source $HOME/.bash_profile
 
 # Sunucu Kamu IP'sini Al
 PUBLIC_IP=$(curl -s http://ipv4.icanhazip.com)
+[ -n "$PUBLIC_IP" ] || fail "Sunucu kamu IP'si alınamadı, ağ bağlantısını kontrol et."
 
 echo "--------------------------------------------------"
 echo -e "${GREEN}[✓] Yapılandırma Doğrulandı:${NC}"
@@ -78,25 +107,58 @@ echo -e "    Sunucu IP:   ${YELLOW}$PUBLIC_IP${NC}"
 echo "--------------------------------------------------"
 echo ""
 
-# 1. ADIM: Eski Servisleri Durdurma, Disable Etme ve State Yedekleme
-echo -e "${BLUE}[1/6] Eski servisler durduruluyor, Geth servisi pasifleştiriliyor...${NC}"
+DATA_DIR="$HOME/.0gchaind/0g-home/0gchaind-home/data"
+PVS_FILE="$DATA_DIR/priv_validator_state.json"
+PVS_BACKUP="$HOME/.0gchaind/priv_validator_state.json.backup"
+PVS_WAS_BACKED_UP=0
+
+# 1. ADIM: Snapshot Kaynağını Önceden Doğrula (VERİ SİLİNMEDEN ÖNCE!)
+echo -e "${BLUE}[1/7] Snapshot sunucusu kontrol ediliyor (veri silinmeden önce doğrulama)...${NC}"
+SNAPSHOT_URL="https://files.corenodehq.xyz/0g/snapshot/"
+SNAPSHOT_LISTING=$(curl -sf "$SNAPSHOT_URL") || fail "Snapshot sunucusuna erişilemedi: $SNAPSHOT_URL"
+
+LATEST_COSMOS=$(echo "$SNAPSHOT_LISTING" | grep -oP '0g_\d{8}-\d{4}_\d+_cosmos\.tar\.lz4' | sort | tail -n 1)
+LATEST_RETH=$(echo "$SNAPSHOT_LISTING" | grep -oP '0g_\d{8}-\d{4}_\d+_reth\.tar\.lz4' | sort | tail -n 1)
+
+if [ -z "$LATEST_COSMOS" ] || [ -z "$LATEST_RETH" ]; then
+    fail "Snapshot sunucusunda geçerli dosya bulunamadı. Hiçbir yerel veri SİLİNMEDİ, güvenle çıkılıyor."
+fi
+echo -e "${GREEN}[✓] Snapshot dosyaları bulundu:${NC}"
+echo -e "    Cosmos: ${YELLOW}$LATEST_COSMOS${NC}"
+echo -e "    Reth:   ${YELLOW}$LATEST_RETH${NC}"
+
+# 2. ADIM: Eski Servisleri Durdurma, Disable Etme ve Validator State Yedekleme
+echo -e "${BLUE}[2/7] Eski servisler durduruluyor, Geth servisi pasifleştiriliyor...${NC}"
 sudo systemctl stop 0gchaind geth reth 2>/dev/null
 sudo systemctl disable geth 2>/dev/null
 sudo rm -f /etc/systemd/system/geth.service 2>/dev/null
 
-# Validator state yedeği
-mv $HOME/.0gchaind/0g-home/0gchaind-home/data/priv_validator_state.json $HOME/.0gchaind/priv_validator_state.json.backup 2>/dev/null || true
+# Validator state yedeği — KRİTİK: başarısız olursa işlemi durdur (çifte imzalama riski)
+if [ -f "$PVS_FILE" ]; then
+    mv "$PVS_FILE" "$PVS_BACKUP" || fail "priv_validator_state.json yedeklenemedi! Çifte imzalama riski nedeniyle işlem durduruldu."
+    PVS_WAS_BACKED_UP=1
+    echo -e "${GREEN}[✓] priv_validator_state.json yedeklendi.${NC}"
+else
+    echo -e "${YELLOW}[!] priv_validator_state.json bulunamadı (yeni kurulum olabilir), yedekleme atlandı.${NC}"
+fi
 
-# 2. ADIM: Bağımlılık Paketleri ve Aristotle v1.0.6 Hazırlığı
-echo -e "${BLUE}[2/6] Aristotle v1.0.6 binary'leri ve JWT yapılandırması yükleniyor...${NC}"
-sudo apt update && sudo apt install aria2 lz4 jq -y &>/dev/null
+# 3. ADIM: Bağımlılık Paketleri ve Aristotle v1.0.6 Hazırlığı
+echo -e "${BLUE}[3/7] Aristotle v1.0.6 binary'leri ve JWT yapılandırması yükleniyor...${NC}"
 
 cd $HOME
-wget -O aristotle.tar.gz https://github.com/0gfoundation/0gchain-Aristotle/releases/download/v1.0.6/aristotle-v1.0.6.tar.gz &>/dev/null
-tar -xzvf aristotle.tar.gz -C $HOME &>/dev/null
-rm -rf aristotle.tar.gz
+wget -O aristotle.tar.gz https://github.com/0gfoundation/0gchain-Aristotle/releases/download/v1.0.6/aristotle-v1.0.6.tar.gz
+[ -s aristotle.tar.gz ] || fail "Aristotle v1.0.6 indirilemedi (dosya boş veya yok)."
+
+# Arşivin gerçek kök klasör adını dinamik yakala (büyük/küçük harf uyuşmazlığı riskini ortadan kaldırır)
+EXTRACTED_DIR=$(tar -tzf aristotle.tar.gz | head -1 | cut -f1 -d"/")
+[ -n "$EXTRACTED_DIR" ] || fail "Arşiv içeriği okunamadı."
+
+tar -xzf aristotle.tar.gz -C $HOME || fail "Arşiv açılamadı."
+rm -f aristotle.tar.gz
 rm -rf $HOME/aristotle-used 2>/dev/null
-mv $HOME/Aristotle-v1.0.6 $HOME/aristotle-used
+mv "$HOME/$EXTRACTED_DIR" "$HOME/aristotle-used" || fail "Çıkarılan klasör '$EXTRACTED_DIR' bulunamadı/taşınamadı."
+
+[ -f "$HOME/aristotle-used/bin/reth" ] && [ -f "$HOME/aristotle-used/bin/0gchaind" ] || fail "reth veya 0gchaind binary'leri paket içinde bulunamadı."
 
 mkdir -p $HOME/go/bin
 sudo chmod 777 $HOME/aristotle-used/bin/*
@@ -108,51 +170,60 @@ mkdir -p $HOME/.0gchaind/0g-home/reth-home
 cp $HOME/aristotle-used/jwt.hex $HOME/.0gchaind/0g-home/
 cp $HOME/aristotle-used/kzg-trusted-setup.json $HOME/.0gchaind/0g-home/
 
-echo -e "${GREEN}[✓] Aristotle binary'leri ve JWT/KZG dosyaları yerleştirildi.${NC}"
+echo -e "${GREEN}[✓] Aristotle binary'leri ve JWT/KZG dosyaları yerleştirildi (klasör: $EXTRACTED_DIR).${NC}"
 
-# 3. ADIM: Eski Verileri Silme ve Temizlik
-echo -e "${BLUE}[3/6] Eski Geth ve Cosmos verileri temizleniyor...${NC}"
+# 4. ADIM: Eski Verileri Silme ve Temizlik (artık snapshot doğrulandıktan SONRA)
+echo -e "${BLUE}[4/7] Eski Geth ve Cosmos verileri temizleniyor...${NC}"
 rm -rf $HOME/.0gchaind/0g-home/geth-home
 rm -rf $HOME/.0gchaind/0g-home/0gchaind-home/data
 rm -rf $HOME/.0gchaind/0g-home/reth-home/db
 rm -rf $HOME/.0gchaind/0g-home/reth-home/static_files
 
-# 4. ADIM: Snapshot İndirme ve Kurulum
-echo -e "${BLUE}[4/6] Corenode Snapshot sunucusundan güncel paketler indiriliyor...${NC}"
+# 5. ADIM: Snapshot İndirme ve Kurulum (indirme bütünlüğü kontrol edilerek)
+echo -e "${BLUE}[5/7] Corenode Snapshot sunucusundan güncel paketler indiriliyor...${NC}"
 
-SNAPSHOT_URL="https://files.corenodehq.xyz/0g/snapshot/"
-LATEST_COSMOS=$(curl -s $SNAPSHOT_URL | grep -oP '0g_\d{8}-\d{4}_\d+_cosmos\.tar\.lz4' | sort | tail -n 1)
-LATEST_RETH=$(curl -s $SNAPSHOT_URL | grep -oP '0g_\d{8}-\d{4}_\d+_reth\.tar\.lz4' | sort | tail -n 1)
+COSMOS_URL="${SNAPSHOT_URL}${LATEST_COSMOS}"
+RETH_URL="${SNAPSHOT_URL}${LATEST_RETH}"
 
-if [ -n "$LATEST_COSMOS" ] && [ -n "$LATEST_RETH" ]; then
-    echo -e "${YELLOW}[>] Cosmos Snapshot: $LATEST_COSMOS${NC}"
-    echo -e "${YELLOW}[>] Reth Snapshot:   $LATEST_RETH${NC}"
+echo -e "${CYAN}Cosmos verisi indiriliyor...${NC}"
+aria2c -x 16 -s 16 -k 1M --continue=true --dir=/tmp --out="$LATEST_COSMOS" "$COSMOS_URL" \
+    || fail "Cosmos snapshot indirilemedi."
+[ -s "/tmp/$LATEST_COSMOS" ] || fail "Cosmos snapshot dosyası boş/yok."
 
-    COSMOS_URL="${SNAPSHOT_URL}${LATEST_COSMOS}"
-    RETH_URL="${SNAPSHOT_URL}${LATEST_RETH}"
+mkdir -p $HOME/.0gchaind/0g-home/0gchaind-home
+lz4 -dc "/tmp/$LATEST_COSMOS" | tar -xf - -C $HOME/.0gchaind/0g-home/0gchaind-home \
+    || fail "Cosmos snapshot çıkartılamadı (bozuk arşiv olabilir)."
+rm -f "/tmp/$LATEST_COSMOS"
 
-    echo -e "${CYAN}Cosmos verisi indiriliyor ve çıkartılıyor...${NC}"
-    aria2c -x 16 -s 16 -k 1M --continue=true --dir=/tmp --out="$LATEST_COSMOS" "$COSMOS_URL"
-    lz4 -dc /tmp/"$LATEST_COSMOS" | tar -xf - -C $HOME/.0gchaind/0g-home/0gchaind-home
-    rm -f /tmp/"$LATEST_COSMOS"
+echo -e "${CYAN}Reth verisi indiriliyor...${NC}"
+aria2c -x 16 -s 16 -k 1M --continue=true --dir=/tmp --out="$LATEST_RETH" "$RETH_URL" \
+    || fail "Reth snapshot indirilemedi."
+[ -s "/tmp/$LATEST_RETH" ] || fail "Reth snapshot dosyası boş/yok."
 
-    echo -e "${CYAN}Reth verisi indiriliyor ve çıkartılıyor...${NC}"
-    aria2c -x 16 -s 16 -k 1M --continue=true --dir=/tmp --out="$LATEST_RETH" "$RETH_URL"
-    lz4 -dc /tmp/"$LATEST_RETH" | tar -xf - -C $HOME/.0gchaind/0g-home/reth-home
-    rm -f /tmp/"$LATEST_RETH"
+lz4 -dc "/tmp/$LATEST_RETH" | tar -xf - -C $HOME/.0gchaind/0g-home/reth-home \
+    || fail "Reth snapshot çıkartılamadı (bozuk arşiv olabilir)."
+rm -f "/tmp/$LATEST_RETH"
 
-    # Validator state dosyasını geri yükle
-    mv $HOME/.0gchaind/priv_validator_state.json.backup $HOME/.0gchaind/0g-home/0gchaind-home/data/priv_validator_state.json 2>/dev/null || true
-    echo -e "${GREEN}[✓] Snapshot'lar başarıyla açıldı ve entegre edildi.${NC}"
+echo -e "${GREEN}[✓] Snapshot'lar başarıyla açıldı ve entegre edildi.${NC}"
+
+# Validator state dosyasını geri yükle — KRİTİK: başarısız olursa 0gchaind BAŞLATILMAMALI
+mkdir -p "$DATA_DIR"
+if [ "$PVS_WAS_BACKED_UP" -eq 1 ]; then
+    mv "$PVS_BACKUP" "$PVS_FILE" || fail "priv_validator_state.json GERİ YÜKLENEMEDİ! 0gchaind'i başlatma — çifte imzalama riski var. Manuel müdahale gerekiyor: $PVS_BACKUP"
+    echo -e "${GREEN}[✓] priv_validator_state.json geri yüklendi (orijinal imzalama geçmişi korundu).${NC}"
 else
-    echo -e "${RED}[!] HATA: Snapshot sunucusunda geçerli dosya bulunamadı! İşlem iptal ediliyor.${NC}"
-    exit 1
+    echo -e "${YELLOW}[!] Geri yüklenecek bir priv_validator_state.json yedeği yoktu, snapshot'ın kendi dosyası kullanılacak.${NC}"
 fi
 
-# 5. ADIM: Systemd Servis Dosyalarının Yenilenmesi
-echo -e "${BLUE}[5/6] Systemd servis yapılandırmaları yazılıyor...${NC}"
+# 6. ADIM: Systemd Servis Dosyalarının Yenilenmesi
+echo -e "${BLUE}[6/7] Systemd servis yapılandırmaları yazılıyor...${NC}"
 
-sed -i "s|^rpc-dial-url *=.*|rpc-dial-url = \"http://localhost:${OG_PORT}551\"|" $HOME/.0gchaind/0g-home/0gchaind-home/config/app.toml 2>/dev/null
+CONFIG_FILE="$HOME/.0gchaind/0g-home/0gchaind-home/config/app.toml"
+if grep -q "^rpc-dial-url" "$CONFIG_FILE" 2>/dev/null; then
+    sed -i "s|^rpc-dial-url *=.*|rpc-dial-url = \"http://localhost:${OG_PORT}551\"|" "$CONFIG_FILE"
+else
+    echo -e "${YELLOW}[!] UYARI: '$CONFIG_FILE' içinde 'rpc-dial-url' satırı bulunamadı, manuel kontrol et.${NC}"
+fi
 
 # Reth Servisi
 sudo tee /etc/systemd/system/reth.service > /dev/null <<SEVEOF
@@ -226,11 +297,19 @@ sudo systemctl daemon-reload
 sudo systemctl enable reth 0gchaind
 echo -e "${GREEN}[✓] Servis dosyaları güncellendi ve aktif edildi.${NC}"
 
-# 6. ADIM: Başlatma ve Kapanış
-echo -e "${BLUE}[6/6] Yeni Reth ve Consensus servisleri tetikleniyor...${NC}"
+# 7. ADIM: Başlatma ve Doğrulama
+echo -e "${BLUE}[7/7] Yeni Reth ve Consensus servisleri tetikleniyor...${NC}"
 sudo systemctl start reth
-sleep 3
+sleep 5
+if ! sudo systemctl is-active --quiet reth; then
+    echo -e "${RED}[✗] reth servisi başlatılamadı! Loglar: sudo journalctl -u reth -n 50 --no-pager${NC}"
+fi
+
 sudo systemctl start 0gchaind
+sleep 5
+if ! sudo systemctl is-active --quiet 0gchaind; then
+    echo -e "${RED}[✗] 0gchaind servisi başlatılamadı! Loglar: sudo journalctl -u 0gchaind -n 50 --no-pager${NC}"
+fi
 
 echo -e "${GREEN}========================================================================"
 echo -e "   [✓] MIGRATION VE SNAPSHOT KURULUMU BAŞARIYLA TAMAMLANDI! [✓]   "
