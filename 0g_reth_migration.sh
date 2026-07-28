@@ -6,6 +6,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+OG_PURPLE='\033[38;2;203;138;255m' # 0G Hex: #CB8AFF
 NC='\033[0m' # No Color
 
 # Ekranı Temizle ve Corenode Logosunu Bas
@@ -322,7 +323,20 @@ fi
 echo -e "${GREEN}========================================================================"
 echo -e "   [✓] MIGRATION TAMAMLANDI! NODE BAŞARIYLA RETH MIMARISINE GECTI. [✓]  "
 echo -e "========================================================================${NC}"
-echo -e "${YELLOW}Logları anlık izlemek için aşağıdaki komutları kullanabilirsin:${NC}"
+echo -e "${OG_PURPLE}"
+cat << "EOF"
+      ████████        ████████   
+    ███  ██  ███    ███      ███ 
+   ███  ██    ███  ███           
+   ███ ██     ███  ███   ████████
+   █████      ███  ███        ███
+    ███      ███    ███      ███ 
+      ████████        ████████   
+
+              WE ARE 0G
+EOF
+echo -e "${NC}"
+echo -e "${YELLOW}Logları anlık izlemek için:${NC}"
 echo -e "    Reth Logları:      ${CYAN}sudo journalctl -u reth -f -o cat${NC}"
 echo -e "    Consensus Logları: ${CYAN}sudo journalctl -u 0gchaind -f -o cat${NC}"
 echo ""
