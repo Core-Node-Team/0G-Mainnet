@@ -19,8 +19,6 @@ mkdir -p $BACKUP_DIR
 cp -r $HOME/.0gchaind/0g-home/0gchaind-home $BACKUP_DIR/0gchaind-home
 ```
 
-> Not: `geth-home` için ayrıca yedek almıyoruz çünkü geth'i tamamen bırakıyoruz ve reth-home snapshot'tan geliyor. İstersen `geth-home`'u da silmeden önce başka bir diske taşıyabilirsin — zorunlu değil ama geri dönüş şansı verir.
-
 ---
 
 ## 2️⃣ Snapshot'ı Silmeden Önce Doğrula (KRİTİK SIRA)
