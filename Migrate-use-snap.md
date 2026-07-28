@@ -93,25 +93,46 @@ mkdir -p $HOME/.0gchaind/0g-home/reth-home
 ### Snapshot'ı indir (bütünlük kontrolüyle)
 
 ```bash
-RETH_URL="${SNAPSHOT_URL}${LATEST_RETH}"
 
-aria2c -x 16 -s 16 -k 1M --continue=true --dir=/tmp --out="$LATEST_RETH" "$RETH_URL"
-[ -s "/tmp/$LATEST_RETH" ] || { echo "HATA: Snapshot dosyası boş/yok."; exit 1; }
 ```
 
-### Arşivi aç
+mv $HOME/.0gchaind/0g-home/0gchaind-home/data/priv_validator_state.json $HOME/.0gchaind/priv_validator_state.json.backup 2>/dev/null || true
 
-```bash
-lz4 -dc "/tmp/$LATEST_RETH" | tar -xf - -C $HOME/.0gchaind/0g-home/reth-home
-rm -f "/tmp/$LATEST_RETH"
-```
+rm -rf $HOME/.0gchaind/0g-home/0gchaind-home/data
+rm -rf $HOME/.0gchaind/0g-home/reth-home/db
+rm -rf $HOME/.0gchaind/0g-home/reth-home/static_files
+mkdir -p $HOME/.0gchaind/0g-home/reth-home
 
-> Not: Snapshot genelde zaten genesis uygulanmış tam bir `reth-home` (db + static_files) içerir. Bu durumda ayrıca `reth init` çalıştırmana gerek yoktur. Eğer snapshot sağlayıcısı "sadece db, genesis hariç" diye belirtiyorsa, açma işleminden önce şu adımı ekle:
-> ```bash
-> reth init --chain $HOME/aristotle-used/geth-genesis.json --datadir $HOME/.0gchaind/0g-home/reth-home
-> ```
+SNAPSHOT_URL="https://files.corenodehq.xyz/0g/snapshot/"
+LATEST_COSMOS=$(curl -s $SNAPSHOT_URL | grep -oP '0g_\d{8}-\d{4}_\d+_cosmos\.tar\.lz4' | sort | tail -n 1)
+LATEST_RETH=$(curl -s $SNAPSHOT_URL | grep -oP '0g_\d{8}-\d{4}_\d+_reth\.tar\.lz4' | sort | tail -n 1)
 
----
+if [ -n "$LATEST_COSMOS" ] && [ -n "$LATEST_RETH" ]; then
+  COSMOS_URL="${SNAPSHOT_URL}${LATEST_COSMOS}"
+  RETH_URL="${SNAPSHOT_URL}${LATEST_RETH}"
+
+  if curl -s --head "$COSMOS_URL" | head -n 1 | grep "200" > /dev/null && \
+     curl -s --head "$RETH_URL" | head -n 1 | grep "200" > /dev/null; then
+
+    echo "Cosmos Snapshot indiriliyor ve açılıyor..."
+    aria2c -x 16 -s 16 -k 1M --continue=true --dir=/tmp --out="$LATEST_COSMOS" "$COSMOS_URL"
+    lz4 -dc /tmp/"$LATEST_COSMOS" | tar -xf - -C $HOME/.0gchaind/0g-home/0gchaind-home
+    rm -f /tmp/"$LATEST_COSMOS"
+    
+    echo "Reth Snapshot indiriliyor ve açılıyor..."
+    aria2c -x 16 -s 16 -k 1M --continue=true --dir=/tmp --out="$LATEST_RETH" "$RETH_URL"
+    lz4 -dc /tmp/"$LATEST_RETH" | tar -xf - -C $HOME/.0gchaind/0g-home/reth-home
+    rm -f /tmp/"$LATEST_RETH"
+
+    # Priv validator state dosyasını geri yükle
+    mv $HOME/.0gchaind/priv_validator_state.json.backup $HOME/.0gchaind/0g-home/0gchaind-home/data/priv_validator_state.json 2>/dev/null || true
+
+  else
+    echo "Snapshot URL is not accessible"
+  fi
+else
+  echo "No snapshot found"
+fi
 
 ## 5️⃣ Konfigürasyon Güncellemesi ve Servis Dosyaları
 
