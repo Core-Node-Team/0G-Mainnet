@@ -164,21 +164,21 @@ After=network.target
 User=$USER
 Type=simple
 WorkingDirectory=$HOME/aristotle-used
-ExecStart=$HOME/go/bin/reth node \\
-  --chain $HOME/aristotle-used/geth-genesis.json \\
-  --http \\
-  --http.addr 0.0.0.0 \\
-  --http.port ${OG_PORT}545 \\
-  --http.api eth,net,admin \\
-  --authrpc.addr 0.0.0.0 \\
-  --authrpc.port ${OG_PORT}551 \\
-  --authrpc.jwtsecret $HOME/.0gchaind/0g-home/jwt.hex \\
-  --datadir $HOME/.0gchaind/0g-home/reth-home \\
-  --ipcpath $HOME/.0gchaind/0g-home/reth-home/eth-engine.ipc \\
-  --engine.persistence-threshold 0 \\
-  --engine.memory-block-buffer-target 0 \\
-  --bootnodes="enode://2bf74c837a98c94ad0fa8f5c58a428237d2040f9269fe622c3dbe4fef68141c28e2097d7af6ebaa041194257543dc112514238361a6498f9a38f70fd56493f96@8.221.140.134:30303" \\
-  --port ${OG_PORT}303 \\
+ExecStart=$HOME/go/bin/reth node \
+  --chain $HOME/aristotle-used/geth-genesis.json \
+  --http \
+  --http.addr 0.0.0.0 \
+  --http.port ${OG_PORT}545 \
+  --http.api eth,net,admin \
+  --authrpc.addr 0.0.0.0 \
+  --authrpc.port ${OG_PORT}551 \
+  --authrpc.jwtsecret $HOME/.0gchaind/0g-home/jwt.hex \
+  --datadir $HOME/.0gchaind/0g-home/reth-home \
+  --ipcpath $HOME/.0gchaind/0g-home/reth-home/eth-engine.ipc \
+  --engine.persistence-threshold 0 \
+  --engine.memory-block-buffer-target 0 \
+  --bootnodes="enode://2bf74c837a98c94ad0fa8f5c58a428237d2040f9269fe622c3dbe4fef68141c28e2097d7af6ebaa041194257543dc112514238361a6498f9a38f70fd56493f96@8.221.140.134:30303" \
+  --port ${OG_PORT}303 \
   --nat extip:${PUBLIC_IP}
 Restart=always
 RestartSec=3
@@ -197,22 +197,22 @@ After=network.target
 [Service]
 User=$USER
 WorkingDirectory=$HOME/aristotle-used
-ExecStart=$HOME/go/bin/0gchaind start \\
-  --rpc.laddr tcp://0.0.0.0:${OG_PORT}657 \\
-  --chaincfg.chain-spec mainnet \\
-  --chaincfg.kzg.trusted-setup-path=$HOME/.0gchaind/0g-home/kzg-trusted-setup.json \\
-  --chaincfg.engine.jwt-secret-path=$HOME/.0gchaind/0g-home/jwt.hex \\
-  --chaincfg.block-store-service.enabled \\
-  --chaincfg.block-store-service.availability-window=1000 \\
-  --chaincfg.node-api.enabled \\
-  --chaincfg.node-api.address 0.0.0.0:${OG_PORT}500 \\
-  --chaincfg.engine.rpc-dial-url=http://localhost:${OG_PORT}551 \\
-  --pruning=everything \\
-  --min-retain-blocks=10000 \\
-  --chaincfg.restaking.enabled \\
-  --chaincfg.restaking.symbiotic-rpc-dial-url $ETH_RPC_URL \\
-  --chaincfg.restaking.symbiotic-get-logs-block-range 1 \\
-  --home=$HOME/.0gchaind/0g-home/0gchaind-home \\
+ExecStart=$HOME/go/bin/0gchaind start \
+  --rpc.laddr tcp://0.0.0.0:${OG_PORT}657 \
+  --chaincfg.chain-spec mainnet \
+  --chaincfg.kzg.trusted-setup-path=$HOME/.0gchaind/0g-home/kzg-trusted-setup.json \
+  --chaincfg.engine.jwt-secret-path=$HOME/.0gchaind/0g-home/jwt.hex \
+  --chaincfg.block-store-service.enabled \
+  --chaincfg.block-store-service.availability-window=1000 \
+  --chaincfg.node-api.enabled \
+  --chaincfg.node-api.address 0.0.0.0:${OG_PORT}500 \
+  --chaincfg.engine.rpc-dial-url=http://localhost:${OG_PORT}551 \
+  --pruning=everything \
+  --min-retain-blocks=10000 \
+  --chaincfg.restaking.enabled \
+  --chaincfg.restaking.symbiotic-rpc-dial-url $ETH_RPC_URL \
+  --chaincfg.restaking.symbiotic-get-logs-block-range 1 \
+  --home=$HOME/.0gchaind/0g-home/0gchaind-home \
   --p2p.external_address=${PUBLIC_IP}:${OG_PORT}656
 Restart=always
 RestartSec=5
