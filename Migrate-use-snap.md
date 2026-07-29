@@ -1,19 +1,37 @@
-# 🔄 Corenode Altyapısı: Geth'den Reth'e Snapshot ile Geçiş Rehberi
+# 🔄 Corenode Altyapısı: Geth'den Reth'e Snapshot ile Geçiş Rehberi (Cosmos + Reth)
 
+Bu rehber hem consensus (cosmos) hem de execution (reth) verisini hazır snapshot'lardan kurar. RLP export/trim/import'a göre çok daha hızlıdır, ama consensus verisi de değiştiği için `priv_validator_state.json` (çifte imzalama koruması) adımına özellikle dikkat edilmelidir.
 
 ---
 
-## 1️⃣ Servisleri Durdurma ve Güvenlik Yedeği
-
-### Servisleri durdur
+## 1️⃣ Port ve RPC Yapılandırması
 
 ```bash
-sudo systemctl stop 0gchaind geth
+if [ -z "$OG_PORT" ]; then
+    read -p "Lütfen OG_PORT ön ekini giriniz (Örn: 59): " OG_PORT
+    export OG_PORT
+    echo "export OG_PORT=\"$OG_PORT\"" >> $HOME/.bash_profile
+fi
+
+if [ -z "$ETH_RPC_URL" ]; then
+    read -p "Lütfen Ethereum Mainnet RPC URL adresini giriniz: " ETH_RPC_URL
+    export ETH_RPC_URL
+    echo "export ETH_RPC_URL=\"$ETH_RPC_URL\"" >> $HOME/.bash_profile
+fi
+
+source $HOME/.bash_profile
+echo "OG_PORT=$OG_PORT / ETH_RPC_URL=$ETH_RPC_URL"
 ```
 
-### Yedek klasörü oluştur (ihtiyat amaçlı — consensus verisine dokunmuyoruz ama yine de yedekleyelim)
+> ⚠️ Bu iki değişkeni bir daha bu dokümanın sonuna kadar **elle boşaltmayın** (`ETH_RPC_URL=` gibi tek başına bir atama satırı asla yazmayın) — servis dosyaları bu değerleri en sonda kullanıyor.
+
+---
+
+## 2️⃣ Servisleri Durdurma ve Consensus Yedeği
 
 ```bash
+sudo systemctl stop 0gchaind geth reth 2>/dev/null
+
 BACKUP_DIR="$HOME/.0gchaind/backup-$(date +%Y%m%d-%H%M%S)"
 mkdir -p $BACKUP_DIR
 cp -r $HOME/.0gchaind/0g-home/0gchaind-home $BACKUP_DIR/0gchaind-home
@@ -21,28 +39,41 @@ cp -r $HOME/.0gchaind/0g-home/0gchaind-home $BACKUP_DIR/0gchaind-home
 
 ---
 
-## 2️⃣ Snapshot'ı Silmeden Önce Doğrula (KRİTİK SIRA)
+## 3️⃣ Snapshot Kaynağını Doğrula (VERİ SİLİNMEDEN ÖNCE — hem cosmos hem reth)
 
-> ⚠️ **Önemli:** Eski veriyi silmeden önce snapshot'ın gerçekten erişilebilir olduğunu teyit et. Aksi halde sunucu geçici olarak erişilemez durumdaysa elinde ne eski ne yeni veri kalır.
+> ⚠️ **Kritik sıra:** Aşağıdaki doğrulama başarısız olursa hiçbir yerel veri silinmemiş olmalı. Bu yüzden bu adım, verinin silindiği 5. adımdan **önce** gelir ve başarısız olursa script burada durur.
 
 ```bash
 SNAPSHOT_URL="https://files.corenodehq.xyz/0g/snapshot/"
 
 SNAPSHOT_LISTING=$(curl -sf "$SNAPSHOT_URL") || { echo "HATA: Snapshot sunucusuna erişilemedi."; exit 1; }
 
+LATEST_COSMOS=$(echo "$SNAPSHOT_LISTING" | grep -oP '0g_\d{8}-\d{4}_\d+_cosmos\.tar\.lz4' | sort | tail -n 1)
 LATEST_RETH=$(echo "$SNAPSHOT_LISTING" | grep -oP '0g_\d{8}-\d{4}_\d+_reth\.tar\.lz4' | sort | tail -n 1)
 
-if [ -z "$LATEST_RETH" ]; then
-    echo "HATA: Geçerli reth snapshot dosyası bulunamadı, işlem durduruldu."
+if [ -z "$LATEST_COSMOS" ] || [ -z "$LATEST_RETH" ]; then
+    echo "HATA: Geçerli cosmos veya reth snapshot dosyası bulunamadı. Hiçbir veri silinmedi."
     exit 1
 fi
 
-echo "Bulunan Reth Snapshot: $LATEST_RETH"
+COSMOS_URL="${SNAPSHOT_URL}${LATEST_COSMOS}"
+RETH_URL="${SNAPSHOT_URL}${LATEST_RETH}"
+
+if ! curl -s --head "$COSMOS_URL" | head -n 1 | grep -q "200"; then
+    echo "HATA: Cosmos snapshot URL'i erişilemez durumda. Hiçbir veri silinmedi."
+    exit 1
+fi
+if ! curl -s --head "$RETH_URL" | head -n 1 | grep -q "200"; then
+    echo "HATA: Reth snapshot URL'i erişilemez durumda. Hiçbir veri silinmedi."
+    exit 1
+fi
+
+echo "Doğrulandı — Cosmos: $LATEST_COSMOS / Reth: $LATEST_RETH"
 ```
 
 ---
 
-## 3️⃣ Aristotle v1.0.6 Paketi ve Klasör Düzeni
+## 4️⃣ Aristotle v1.0.6 Paketi ve Klasör Düzeni
 
 ```bash
 cd $HOME
@@ -50,18 +81,22 @@ wget -O aristotle.tar.gz https://github.com/0gfoundation/0gchain-Aristotle/relea
 [ -s aristotle.tar.gz ] || { echo "HATA: indirme başarısız."; exit 1; }
 ```
 
-### Klasör adını dinamik olarak yakala (paket içindeki gerçek adla eşleşmeyebilir, büyük/küçük harf farkına dikkat)
+### Klasör adını dinamik yakala ve önceki kalıntıyı temizle
 
 ```bash
 EXTRACTED_DIR=$(tar -tzf aristotle.tar.gz | head -1 | cut -f1 -d"/")
 tar -xzvf aristotle.tar.gz -C $HOME
 rm -rf aristotle.tar.gz
+
+# ÖNEMLİ: hedef klasör zaten varsa mv onu hedefin İÇİNE taşır, önce temizlemek gerekir
+rm -rf $HOME/aristotle-used 2>/dev/null
 mv "$HOME/$EXTRACTED_DIR" "$HOME/aristotle-used"
 ```
 
-### Binary yetkilerini verip go/bin altına taşı
+### Binary yetkilerini ver ve go/bin altına taşı
 
 ```bash
+mkdir -p $HOME/go/bin
 sudo chmod 777 $HOME/aristotle-used/bin/*
 cp $HOME/aristotle-used/bin/reth $HOME/go/bin/reth
 cp $HOME/aristotle-used/bin/0gchaind $HOME/go/bin/0gchaind
@@ -70,70 +105,88 @@ cp $HOME/aristotle-used/bin/0gchaind $HOME/go/bin/0gchaind
 ### Gerekli JWT ve KZG dosyalarını kopyala
 
 ```bash
+mkdir -p $HOME/.0gchaind/0g-home/reth-home
 cp $HOME/aristotle-used/jwt.hex $HOME/.0gchaind/0g-home/
 cp $HOME/aristotle-used/kzg-trusted-setup.json $HOME/.0gchaind/0g-home/
 ```
 
 ---
 
-## 4️⃣ Eski Geth Verisini Temizleme ve Reth Snapshot'ını Kurma
+## 5️⃣ Eski Verileri Silme (artık snapshot doğrulandığı için güvenle yapılıyor)
 
-> Bu adıma geldiysen 2. adımda snapshot'ın var olduğunu zaten doğruladın — artık eski veriyi silmek güvenli.
-
-```bash
-mkdir -p $HOME/.0gchaind/0g-home/reth-home
-```
-
-### Snapshot'ı indir (bütünlük kontrolüyle)
+### Validator state'i yedekle — KRİTİK, sessizce geçilmez
 
 ```bash
-mv $HOME/.0gchaind/0g-home/0gchaind-home/data/priv_validator_state.json $HOME/.0gchaind/priv_validator_state.json.backup 2>/dev/null || true
+PVS_FILE="$HOME/.0gchaind/0g-home/0gchaind-home/data/priv_validator_state.json"
+PVS_BACKUP="$HOME/.0gchaind/priv_validator_state.json.backup"
+
+if [ -f "$PVS_FILE" ]; then
+    mv "$PVS_FILE" "$PVS_BACKUP" || { echo "HATA: priv_validator_state.json yedeklenemedi! Çifte imzalama riski, işlem durduruldu."; exit 1; }
+    PVS_WAS_BACKED_UP=1
+    echo "priv_validator_state.json yedeklendi."
+else
+    PVS_WAS_BACKED_UP=0
+    echo "UYARI: priv_validator_state.json bulunamadı (yeni kurulum olabilir)."
+fi
 ```
-```
+
+### Eski geth, cosmos ve reth verilerini sil
+
+```bash
+rm -rf $HOME/.0gchaind/0g-home/geth-home
 rm -rf $HOME/.0gchaind/0g-home/0gchaind-home/data
 rm -rf $HOME/.0gchaind/0g-home/reth-home/db
 rm -rf $HOME/.0gchaind/0g-home/reth-home/static_files
+```
+
+---
+
+## 6️⃣ Snapshot İndirme ve Açma (Cosmos + Reth)
+
+```bash
+mkdir -p $HOME/.0gchaind/0g-home/0gchaind-home
 mkdir -p $HOME/.0gchaind/0g-home/reth-home
+
+echo "Cosmos verisi indiriliyor..."
+aria2c -x 16 -s 16 -k 1M --continue=true --dir=/tmp --out="$LATEST_COSMOS" "$COSMOS_URL" \
+    || { echo "HATA: Cosmos snapshot indirilemedi."; exit 1; }
+[ -s "/tmp/$LATEST_COSMOS" ] || { echo "HATA: Cosmos snapshot dosyası boş/yok."; exit 1; }
+
+lz4 -dc "/tmp/$LATEST_COSMOS" | tar -xf - -C $HOME/.0gchaind/0g-home/0gchaind-home \
+    || { echo "HATA: Cosmos snapshot açılamadı."; exit 1; }
+rm -f "/tmp/$LATEST_COSMOS"
+
+echo "Reth verisi indiriliyor..."
+aria2c -x 16 -s 16 -k 1M --continue=true --dir=/tmp --out="$LATEST_RETH" "$RETH_URL" \
+    || { echo "HATA: Reth snapshot indirilemedi."; exit 1; }
+[ -s "/tmp/$LATEST_RETH" ] || { echo "HATA: Reth snapshot dosyası boş/yok."; exit 1; }
+
+lz4 -dc "/tmp/$LATEST_RETH" | tar -xf - -C $HOME/.0gchaind/0g-home/reth-home \
+    || { echo "HATA: Reth snapshot açılamadı."; exit 1; }
+rm -f "/tmp/$LATEST_RETH"
+
+echo "Snapshot'lar başarıyla açıldı."
 ```
-```
-SNAPSHOT_URL="https://files.corenodehq.xyz/0g/snapshot/"
-LATEST_COSMOS=$(curl -s $SNAPSHOT_URL | grep -oP '0g_\d{8}-\d{4}_\d+_cosmos\.tar\.lz4' | sort | tail -n 1)
-LATEST_RETH=$(curl -s $SNAPSHOT_URL | grep -oP '0g_\d{8}-\d{4}_\d+_reth\.tar\.lz4' | sort | tail -n 1)
 
-if [ -n "$LATEST_COSMOS" ] && [ -n "$LATEST_RETH" ]; then
-  COSMOS_URL="${SNAPSHOT_URL}${LATEST_COSMOS}"
-  RETH_URL="${SNAPSHOT_URL}${LATEST_RETH}"
+### Validator state'i geri yükle — KRİTİK, sessizce geçilmez
 
-  if curl -s --head "$COSMOS_URL" | head -n 1 | grep "200" > /dev/null && \
-     curl -s --head "$RETH_URL" | head -n 1 | grep "200" > /dev/null; then
+```bash
+mkdir -p "$HOME/.0gchaind/0g-home/0gchaind-home/data"
 
-    echo "Cosmos Snapshot indiriliyor ve açılıyor..."
-    aria2c -x 16 -s 16 -k 1M --continue=true --dir=/tmp --out="$LATEST_COSMOS" "$COSMOS_URL"
-    lz4 -dc /tmp/"$LATEST_COSMOS" | tar -xf - -C $HOME/.0gchaind/0g-home/0gchaind-home
-    rm -f /tmp/"$LATEST_COSMOS"
-    
-    echo "Reth Snapshot indiriliyor ve açılıyor..."
-    aria2c -x 16 -s 16 -k 1M --continue=true --dir=/tmp --out="$LATEST_RETH" "$RETH_URL"
-    lz4 -dc /tmp/"$LATEST_RETH" | tar -xf - -C $HOME/.0gchaind/0g-home/reth-home
-    rm -f /tmp/"$LATEST_RETH"
-
-    # Priv validator state dosyasını geri yükle
-    mv $HOME/.0gchaind/priv_validator_state.json.backup $HOME/.0gchaind/0g-home/0gchaind-home/data/priv_validator_state.json 2>/dev/null || true
-
-  else
-    echo "Snapshot URL is not accessible"
-  fi
+if [ "$PVS_WAS_BACKED_UP" -eq 1 ]; then
+    mv "$PVS_BACKUP" "$PVS_FILE" || { echo "HATA: priv_validator_state.json GERİ YÜKLENEMEDİ! 0gchaind'i başlatma, çifte imzalama riski var. Yedek: $PVS_BACKUP"; exit 1; }
+    echo "priv_validator_state.json geri yüklendi (orijinal imzalama geçmişi korundu)."
 else
-  echo "No snapshot found"
+    echo "Geri yüklenecek yedek yoktu, snapshot'ın kendi dosyası kullanılacak."
 fi
 ```
-## 5️⃣ Konfigürasyon Güncellemesi ve Servis Dosyaları
+
+---
+
+## 7️⃣ Konfigürasyon Güncellemesi ve Servis Dosyaları
 
 ### app.toml engine bağlantısını güncelle
-```
-echo "export OG_PORT=59" >> $HOME/.bash_profile
-source $HOME/.bash_profile
-```
+
 ```bash
 sed -i "s|^rpc-dial-url *=.*|rpc-dial-url = \"http://localhost:${OG_PORT}551\"|" \
   $HOME/.0gchaind/0g-home/0gchaind-home/config/app.toml
@@ -142,10 +195,11 @@ sed -i "s|^rpc-dial-url *=.*|rpc-dial-url = \"http://localhost:${OG_PORT}551\"|"
 ### Eski geth servisini temizle
 
 ```bash
-sudo systemctl disable geth
+sudo systemctl disable geth 2>/dev/null
+sudo rm -f /etc/systemd/system/geth.service 2>/dev/null
 ```
 
-### Kamu IP'sini önceden çözümle (nat extip'in literal `$(...)` olarak kalmasını önlemek için)
+### Kamu IP'sini önceden çözümle
 
 ```bash
 PUBLIC_IP=$(curl -s http://ipv4.icanhazip.com)
@@ -164,21 +218,21 @@ After=network.target
 User=$USER
 Type=simple
 WorkingDirectory=$HOME/aristotle-used
-ExecStart=$HOME/go/bin/reth node \
-  --chain $HOME/aristotle-used/geth-genesis.json \
-  --http \
-  --http.addr 0.0.0.0 \
-  --http.port ${OG_PORT}545 \
-  --http.api eth,net,admin \
-  --authrpc.addr 0.0.0.0 \
-  --authrpc.port ${OG_PORT}551 \
-  --authrpc.jwtsecret $HOME/.0gchaind/0g-home/jwt.hex \
-  --datadir $HOME/.0gchaind/0g-home/reth-home \
-  --ipcpath $HOME/.0gchaind/0g-home/reth-home/eth-engine.ipc \
-  --engine.persistence-threshold 0 \
-  --engine.memory-block-buffer-target 0 \
-  --bootnodes="enode://2bf74c837a98c94ad0fa8f5c58a428237d2040f9269fe622c3dbe4fef68141c28e2097d7af6ebaa041194257543dc112514238361a6498f9a38f70fd56493f96@8.221.140.134:30303" \
-  --port ${OG_PORT}303 \
+ExecStart=$HOME/go/bin/reth node \\
+  --chain $HOME/aristotle-used/geth-genesis.json \\
+  --http \\
+  --http.addr 0.0.0.0 \\
+  --http.port ${OG_PORT}545 \\
+  --http.api eth,net,admin \\
+  --authrpc.addr 0.0.0.0 \\
+  --authrpc.port ${OG_PORT}551 \\
+  --authrpc.jwtsecret $HOME/.0gchaind/0g-home/jwt.hex \\
+  --datadir $HOME/.0gchaind/0g-home/reth-home \\
+  --ipcpath $HOME/.0gchaind/0g-home/reth-home/eth-engine.ipc \\
+  --engine.persistence-threshold 0 \\
+  --engine.memory-block-buffer-target 0 \\
+  --bootnodes="enode://2bf74c837a98c94ad0fa8f5c58a428237d2040f9269fe622c3dbe4fef68141c28e2097d7af6ebaa041194257543dc112514238361a6498f9a38f70fd56493f96@8.221.140.134:30303" \\
+  --port ${OG_PORT}303 \\
   --nat extip:${PUBLIC_IP}
 Restart=always
 RestartSec=3
@@ -189,12 +243,10 @@ WantedBy=multi-user.target
 EOF
 ```
 
-> `${PUBLIC_IP}` burada kaçışsız kullanıldı, çünkü değeri az önce çözümledik ve dosyaya gerçek IP olarak gömülmesini istiyoruz (`\$(curl...)` gibi literal/çözümlenmemiş bırakmıyoruz).
+### 0gchaind.service dosyasını oluştur
 
-### 0gchaind.service dosyasını oluştur (consensus tarafı değişmedi — mevcut haliyle aynı)
-```
-ETH_RPC_URL=
-```
+> `$ETH_RPC_URL` burada 1. adımda ayarladığınız değer olmalı — aradan geçen hiçbir yerde bu değişkeni boşaltmayın.
+
 ```bash
 sudo tee /etc/systemd/system/0gchaind.service > /dev/null <<EOF
 [Unit]
@@ -204,20 +256,20 @@ After=network.target
 [Service]
 User=$USER
 WorkingDirectory=$HOME/aristotle-used
-ExecStart=$HOME/go/bin/0gchaind start \
-  --rpc.laddr tcp://0.0.0.0:${OG_PORT}657 \
-  --chaincfg.chain-spec mainnet \
-  --chaincfg.kzg.trusted-setup-path=$HOME/.0gchaind/0g-home/kzg-trusted-setup.json \
-  --chaincfg.engine.jwt-secret-path=$HOME/.0gchaind/0g-home/jwt.hex \
-  --chaincfg.block-store-service.enabled \
-  --chaincfg.node-api.enabled \
-  --chaincfg.node-api.address 0.0.0.0:${OG_PORT}500 \
-  --chaincfg.engine.rpc-dial-url=http://localhost:${OG_PORT}551 \
-  --pruning=nothing \
-  --chaincfg.restaking.enabled \
-  --chaincfg.restaking.symbiotic-rpc-dial-url $ETH_RPC_URL \
-  --chaincfg.restaking.symbiotic-get-logs-block-range 1 \
-  --home=$HOME/.0gchaind/0g-home/0gchaind-home \
+ExecStart=$HOME/go/bin/0gchaind start \\
+  --rpc.laddr tcp://0.0.0.0:${OG_PORT}657 \\
+  --chaincfg.chain-spec mainnet \\
+  --chaincfg.kzg.trusted-setup-path=$HOME/.0gchaind/0g-home/kzg-trusted-setup.json \\
+  --chaincfg.engine.jwt-secret-path=$HOME/.0gchaind/0g-home/jwt.hex \\
+  --chaincfg.block-store-service.enabled \\
+  --chaincfg.node-api.enabled \\
+  --chaincfg.node-api.address 0.0.0.0:${OG_PORT}500 \\
+  --chaincfg.engine.rpc-dial-url=http://localhost:${OG_PORT}551 \\
+  --pruning=nothing \\
+  --chaincfg.restaking.enabled \\
+  --chaincfg.restaking.symbiotic-rpc-dial-url $ETH_RPC_URL \\
+  --chaincfg.restaking.symbiotic-get-logs-block-range 1 \\
+  --home=$HOME/.0gchaind/0g-home/0gchaind-home \\
   --p2p.external_address=${PUBLIC_IP}:${OG_PORT}656
 Restart=always
 RestartSec=5
@@ -230,7 +282,7 @@ EOF
 
 ---
 
-## 6️⃣ Yeni Servisleri Devreye Alma
+## 8️⃣ Yeni Servisleri Devreye Alma
 
 ```bash
 sudo systemctl daemon-reload
@@ -241,6 +293,8 @@ sudo systemctl enable reth 0gchaind
 
 ```bash
 sudo systemctl start reth
+sleep 5
+sudo systemctl is-active --quiet reth || echo "UYARI: reth başlamadı, loglara bak: sudo journalctl -u reth -n 50 --no-pager"
 ```
 
 ### Engine API portunun dinlemede olduğunu teyit et
@@ -249,20 +303,12 @@ sudo systemctl start reth
 ss -tlnp | grep ${OG_PORT}551
 ```
 
-### Reth'in snapshot yüksekliğinden itibaren senkron olduğunu / consensus tip'ine yakınsadığını kontrol et
-
-```bash
-curl -s -X POST http://localhost:${OG_PORT}545 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result'
-```
-
-> Snapshot birkaç saat/gün eski olabilir — reth başladığında consensus'tan (0gchaind) gelen engine API çağrılarıyla (`newPayload`/`forkchoiceUpdated`) kalan bloklara otomatik yetişir. Bu senkron tamamlanmadan servisleri "sorunlu" sanıp durdurma; loglardan ilerlemeyi izle.
-
 ### Doğrulama tamamsa Consensus katmanını başlat
 
 ```bash
 sudo systemctl start 0gchaind
+sleep 5
+sudo systemctl is-active --quiet 0gchaind || echo "UYARI: 0gchaind başlamadı, loglara bak: sudo journalctl -u 0gchaind -n 50 --no-pager"
 ```
 
 ---
@@ -276,12 +322,11 @@ sudo journalctl -u 0gchaind -f -o cat
 
 ---
 
-## Özet: Bu yaklaşımın eski RLP export/trim/import yöntemine göre farkları
+## Bu sürümde önceki taslağa göre yapılan düzeltmeler
 
-| | RLP Export/Import | Snapshot (bu rehber) |
-|---|---|---|
-| Süre | Saatler (export+import) | Dakikalar (indirme hızına bağlı) |
-| Consensus verisine dokunma | Yok (sadece yedekleniyor) | Yok (sadece yedekleniyor) |
-| Validator state riski | Yok | Yok (çünkü cosmos snapshot'ı kullanılmıyor) |
-| Bağımlılık | `geth`, `python3` (trim script) | `aria2c`, `lz4`, güvenilir bir snapshot kaynağı |
-| Snapshot güncelliği | Anlık (kendi node'undan) | Snapshot sağlayıcısına bağlı (biraz gecikmeli olabilir, reth otomatik yetişir) |
+- Doğrulama (hem cosmos hem reth snapshot'ının var ve erişilebilir olduğu) artık **veri silinmeden önce** yapılıyor; başarısızsa `exit 1` ile duruyor.
+- Snapshot bulunamazsa / URL erişilemezse script artık sadece mesaj yazıp devam etmiyor, **duruyor**.
+- `priv_validator_state.json` yedekleme ve geri yükleme artık `|| true` ile sessizce geçilmiyor — başarısız olursa script durup 0gchaind'i başlatmıyor.
+- `aristotle-used` klasörü `mv`'den önce temizleniyor (yanlış iç içe taşınma riski kalkıyor).
+- Eski `geth-home` de temizlik adımına eklendi.
+- Tek başına duran `ETH_RPC_URL=` gibi değişkeni boşaltan kalıntı satır kaldırıldı; OG_PORT/ETH_RPC_URL artık en başta tek, tutarlı bir bölümde soruluyor.
