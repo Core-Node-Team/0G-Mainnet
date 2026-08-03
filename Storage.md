@@ -130,3 +130,17 @@ tail -f ~/0g-storage-node/run/log/zgs.log.$(TZ=UTC date +%Y-%m-%d) | grep tx_seq
 ```
 curl -X POST http://localhost:5678 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"zgs_getStatus","params":[],"id":1}'  | jq
 ```
+### Storage Snap
+```
+systemctl stop zgsd
+
+rm -rf /root/0g-storage-node/run/db/flow_db
+
+wget https://snapshot.corenodehq.xyz/0g_mainnet/flow_db_snapshot.tar.gz
+
+tar -xzvf flow_db_snapshot.tar.gz
+
+rm flow_db_snapshot.tar.gz
+
+systemctl restart zgsd
+```
